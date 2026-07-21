@@ -1,5 +1,5 @@
-Copy and Paste the below link into a browser.
-use the left and right arrows to move and the space bar to fire.
+Click the link below to start the game.
+Use the left, right arrows to move side to side, and the space bar to fire. P to pause.
 
 https://cgallup.github.io/space-invaders/
 
