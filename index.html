@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Space Invaders</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Courier New', monospace;
+  }
+  #wrap {
+    text-align: center;
+    color: #0f0;
+  }
+  canvas {
+    background: #000;
+    border: 2px solid #0f0;
+    image-rendering: pixelated;
+  }
+  #hud {
+    display: flex;
+    justify-content: space-between;
+    width: 600px;
+    margin: 0 auto 6px;
+    font-size: 18px;
+    letter-spacing: 1px;
+  }
+  #msg {
+    position: absolute;
+    color: #0f0;
+    font-size: 22px;
+    text-align: center;
+    width: 600px;
+    pointer-events: none;
+    margin-top: -320px;
+  }
+  #hint {
+    color: #0a0;
+    font-size: 13px;
+    margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <span id="score">SCORE: 0</span>
+    <span id="lives">LIVES: 3</span>
+  </div>
+  <div style="position:relative;">
+    <canvas id="game" width="600" height="600"></canvas>
+    <div id="msg"></div>
+  </div>
+  <div id="hint">ARROW KEYS / A-D to move &nbsp;•&nbsp; SPACE to shoot &nbsp;•&nbsp; P to pause</div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const msgEl = document.getElementById('msg');
+
+const W = canvas.width, H = canvas.height;
+
+// ---------- Input ----------
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'KeyP') togglePause();
+  if (e.code === 'Enter' && (state === 'gameover' || state === 'win')) resetGame();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Game State ----------
+let state = 'playing'; // playing | paused | gameover | win
+let score = 0;
+let lives = 3;
+
+// ---------- Player ----------
+const player = {
+  w: 40, h: 18,
+  x: W / 2 - 20,
+  y: H - 40,
+  speed: 5,
+  cooldown: 0,
+};
+
+let playerBullets = [];
+let enemyBullets = [];
+
+// ---------- Invaders ----------
+const ROWS = 5;
+const COLS = 10;
+const INV_W = 32, INV_H = 22;
+const INV_PAD_X = 14, INV_PAD_Y = 16;
+const GRID_LEFT = 60, GRID_TOP = 60;
+
+let invaders = [];
+let invaderDir = 1; // 1 = right, -1 = left
+let invaderSpeed = 10; // px per step (horizontal)
+let invaderStepDown = 18;
+let invaderMoveTimer = 0;
+let invaderMoveInterval = 45; // frames between steps, shrinks as invaders die
+
+const ROW_COLORS = ['#ff3355', '#ffaa00', '#ffee00', '#33ff66', '#33ccff'];
+const ROW_POINTS = [30, 20, 20, 10, 10];
+
+function makeInvaders() {
+  const arr = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      arr.push({
+        row: r, col: c,
+        x: GRID_LEFT + c * (INV_W + INV_PAD_X),
+        y: GRID_TOP + r * (INV_H + INV_PAD_Y),
+        alive: true,
+      });
+    }
+  }
+  return arr;
+}
+
+// ---------- Bunkers (shields) ----------
+// Each bunker is a grid of small blocks that erode on hit.
+const BUNKER_COUNT = 4;
+const BLOCK = 4;
+const BUNKER_COLS = 11;
+const BUNKER_ROWS = 7;
+let bunkers = [];
+
+function makeBunkerShape() {
+  // simple classic-ish bunker silhouette
+  const shape = [];
+  for (let r = 0; r < BUNKER_ROWS; r++) {
+    const row = [];
+    for (let c = 0; c < BUNKER_COLS; c++) {
+      let alive = true;
+      // notch out the bottom middle (the "arch")
+      if (r >= BUNKER_ROWS - 3 && c >= 4 && c <= 6) alive = false;
+      // round the top corners slightly
+      if (r === 0 && (c === 0 || c === BUNKER_COLS - 1)) alive = false;
+      row.push(alive);
+    }
+    shape.push(row);
+  }
+  return shape;
+}
+
+function makeBunkers() {
+  const arr = [];
+  const totalW = BUNKER_COLS * BLOCK;
+  const spacing = (W - BUNKER_COUNT * totalW) / (BUNKER_COUNT + 1);
+  for (let i = 0; i < BUNKER_COUNT; i++) {
+    arr.push({
+      x: spacing + i * (totalW + spacing),
+      y: H - 140,
+      blocks: makeBunkerShape(),
+    });
+  }
+  return arr;
+}
+
+// ---------- Reset ----------
+function resetGame() {
+  score = 0;
+  lives = 3;
+  player.x = W / 2 - player.w / 2;
+  playerBullets = [];
+  enemyBullets = [];
+  invaders = makeInvaders();
+  invaderDir = 1;
+  invaderMoveInterval = 45;
+  invaderMoveTimer = 0;
+  bunkers = makeBunkers();
+  state = 'playing';
+  msgEl.textContent = '';
+  updateHud();
+}
+
+function updateHud() {
+  scoreEl.textContent = 'SCORE: ' + score;
+  livesEl.textContent = 'LIVES: ' + lives;
+}
+
+function togglePause() {
+  if (state === 'playing') { state = 'paused'; msgEl.textContent = 'PAUSED'; }
+  else if (state === 'paused') { state = 'playing'; msgEl.textContent = ''; }
+}
+
+// ---------- Update ----------
+function aliveInvaders() {
+  return invaders.filter(i => i.alive);
+}
+
+function update() {
+  if (state !== 'playing') return;
+
+  // player movement
+  if (keys['ArrowLeft'] || keys['KeyA']) player.x -= player.speed;
+  if (keys['ArrowRight'] || keys['KeyD']) player.x += player.speed;
+  player.x = Math.max(0, Math.min(W - player.w, player.x));
+
+  // shooting
+  if (player.cooldown > 0) player.cooldown--;
+  if (keys['Space'] && player.cooldown === 0) {
+    playerBullets.push({ x: player.x + player.w / 2 - 2, y: player.y, w: 4, h: 12 });
+    player.cooldown = 18;
+  }
+
+  // move player bullets
+  playerBullets.forEach(b => b.y -= 9);
+  playerBullets = playerBullets.filter(b => b.y + b.h > 0);
+
+  // move enemy bullets
+  enemyBullets.forEach(b => b.y += 5);
+  enemyBullets = enemyBullets.filter(b => b.y < H);
+
+  // invader movement (stepwise, classic style)
+  const alive = aliveInvaders();
+  if (alive.length > 0) {
+    invaderMoveTimer++;
+    if (invaderMoveTimer >= invaderMoveInterval) {
+      invaderMoveTimer = 0;
+      let minX = Math.min(...alive.map(i => i.x));
+      let maxX = Math.max(...alive.map(i => i.x + INV_W));
+      let hitEdge = (invaderDir === 1 && maxX + invaderSpeed >= W) ||
+                    (invaderDir === -1 && minX - invaderSpeed <= 0);
+      if (hitEdge) {
+        invaders.forEach(i => { i.y += invaderStepDown; });
+        invaderDir *= -1;
+      } else {
+        invaders.forEach(i => { i.x += invaderSpeed * invaderDir; });
+      }
+      // speed up as fewer remain
+      invaderMoveInterval = Math.max(6, 8 + alive.length * 1.5);
+    }
+
+    // random enemy fire
+    if (Math.random() < 0.02 + (1 - alive.length / (ROWS * COLS)) * 0.02) {
+      const shooters = {};
+      alive.forEach(i => {
+        if (!shooters[i.col] || shooters[i.col].y < i.y) shooters[i.col] = i;
+      });
+      const cols = Object.values(shooters);
+      const shooter = cols[Math.floor(Math.random() * cols.length)];
+      if (shooter) {
+        enemyBullets.push({ x: shooter.x + INV_W / 2 - 2, y: shooter.y + INV_H, w: 4, h: 12 });
+      }
+    }
+
+    // check invaders reaching player line -> game over
+    if (alive.some(i => i.y + INV_H >= player.y)) {
+      endGame(false);
+      return;
+    }
+  } else {
+    endGame(true);
+    return;
+  }
+
+  // collisions: player bullets vs invaders
+  playerBullets.forEach(b => {
+    for (const inv of invaders) {
+      if (!inv.alive) continue;
+      if (rectsOverlap(b, { x: inv.x, y: inv.y, w: INV_W, h: INV_H })) {
+        inv.alive = false;
+        b.hit = true;
+        score += ROW_POINTS[inv.row];
+        updateHud();
+        break;
+      }
+    }
+  });
+  playerBullets = playerBullets.filter(b => !b.hit);
+
+  // collisions: bullets vs bunkers
+  playerBullets.forEach(b => damageBunkers(b));
+  enemyBullets.forEach(b => damageBunkers(b));
+  playerBullets = playerBullets.filter(b => !b.hit);
+  enemyBullets = enemyBullets.filter(b => !b.hit);
+
+  // collisions: enemy bullets vs player
+  enemyBullets.forEach(b => {
+    if (rectsOverlap(b, player)) {
+      b.hit = true;
+      playerHit();
+    }
+  });
+  enemyBullets = enemyBullets.filter(b => !b.hit);
+}
+
+function damageBunkers(bullet) {
+  for (const bunker of bunkers) {
+    for (let r = 0; r < BUNKER_ROWS; r++) {
+      for (let c = 0; c < BUNKER_COLS; c++) {
+        if (!bunker.blocks[r][c]) continue;
+        const bx = bunker.x + c * BLOCK;
+        const by = bunker.y + r * BLOCK;
+        if (rectsOverlap(bullet, { x: bx, y: by, w: BLOCK, h: BLOCK })) {
+          bunker.blocks[r][c] = false;
+          bullet.hit = true;
+          return;
+        }
+      }
+    }
+  }
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function playerHit() {
+  lives--;
+  updateHud();
+  if (lives <= 0) {
+    endGame(false);
+  } else {
+    player.x = W / 2 - player.w / 2;
+  }
+}
+
+function endGame(won) {
+  state = won ? 'win' : 'gameover';
+  msgEl.innerHTML = won
+    ? 'YOU WIN!<br><span style="font-size:14px">Press ENTER to play again</span>'
+    : 'GAME OVER<br><span style="font-size:14px">Press ENTER to play again</span>';
+}
+
+// ---------- Draw ----------
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // player
+  ctx.fillStyle = '#0f0';
+  ctx.fillRect(player.x, player.y, player.w, player.h);
+  ctx.fillRect(player.x + player.w / 2 - 4, player.y - 8, 8, 8);
+
+  // player bullets
+  ctx.fillStyle = '#fff';
+  playerBullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+  // enemy bullets
+  ctx.fillStyle = '#ff0';
+  enemyBullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+  // invaders
+  invaders.forEach(inv => {
+    if (!inv.alive) return;
+    ctx.fillStyle = ROW_COLORS[inv.row];
+    drawInvaderSprite(inv.x, inv.y);
+  });
+
+  // bunkers
+  ctx.fillStyle = '#0af';
+  bunkers.forEach(bunker => {
+    for (let r = 0; r < BUNKER_ROWS; r++) {
+      for (let c = 0; c < BUNKER_COLS; c++) {
+        if (bunker.blocks[r][c]) {
+          ctx.fillRect(bunker.x + c * BLOCK, bunker.y + r * BLOCK, BLOCK, BLOCK);
+        }
+      }
+    }
+  });
+}
+
+function drawInvaderSprite(x, y) {
+  // simple blocky "invader" body
+  ctx.fillRect(x + 4, y, INV_W - 8, 4);
+  ctx.fillRect(x + 8, y + 4, INV_W - 16, 4);
+  ctx.fillRect(x, y + 8, INV_W, 6);
+  ctx.fillRect(x + 4, y + 14, 6, 4);
+  ctx.fillRect(x + INV_W - 10, y + 14, 6, 4);
+  ctx.fillRect(x + 2, y + 18, 4, 4);
+  ctx.fillRect(x + INV_W - 6, y + 18, 4, 4);
+}
+
+// ---------- Loop ----------
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+resetGame();
+loop();
+</script>
+</body>
+</html>
