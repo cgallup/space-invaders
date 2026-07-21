@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Space Invaders</title>
 <style>
   html, body {
@@ -12,20 +13,34 @@
     align-items: center;
     justify-content: center;
     font-family: 'Courier New', monospace;
+    overscroll-behavior: none;
   }
   #wrap {
     text-align: center;
     color: #0f0;
+    width: 100%;
+    max-width: 600px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    touch-action: none;
+  }
+  .canvas-box {
+    position: relative;
+    width: 100%;
   }
   canvas {
     background: #000;
     border: 2px solid #0f0;
     image-rendering: pixelated;
+    width: 100%;
+    height: auto;
+    display: block;
+    touch-action: none;
   }
   #hud {
     display: flex;
     justify-content: space-between;
-    width: 600px;
+    width: 100%;
     margin: 0 auto 6px;
     font-size: 18px;
     letter-spacing: 1px;
@@ -35,14 +50,49 @@
     color: #0f0;
     font-size: 22px;
     text-align: center;
-    width: 600px;
+    width: 100%;
+    top: 40%;
     pointer-events: none;
-    margin-top: -320px;
   }
   #hint {
     color: #0a0;
     font-size: 13px;
     margin-top: 6px;
+  }
+  #controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #controls .side {
+    display: flex;
+    gap: 10px;
+  }
+  .ctrl-btn {
+    font-family: inherit;
+    font-size: 26px;
+    color: #0f0;
+    background: #001a00;
+    border: 2px solid #0f0;
+    border-radius: 10px;
+    width: 64px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ctrl-btn:active, .ctrl-btn.active {
+    background: #0f0;
+    color: #000;
+  }
+  #fireBtn {
+    width: 96px;
   }
 </style>
 </head>
@@ -52,11 +102,18 @@
     <span id="score">SCORE: 0</span>
     <span id="lives">LIVES: 3</span>
   </div>
-  <div style="position:relative;">
+  <div class="canvas-box">
     <canvas id="game" width="600" height="600"></canvas>
     <div id="msg"></div>
   </div>
   <div id="hint">ARROW KEYS / A-D to move &nbsp;•&nbsp; SPACE to shoot &nbsp;•&nbsp; P to pause</div>
+  <div id="controls">
+    <div class="side">
+      <button class="ctrl-btn" id="leftBtn">&#9664;</button>
+      <button class="ctrl-btn" id="rightBtn">&#9654;</button>
+    </div>
+    <button class="ctrl-btn" id="fireBtn">FIRE</button>
+  </div>
 </div>
 
 <script>
@@ -77,6 +134,24 @@ window.addEventListener('keydown', e => {
   if (e.code === 'Enter' && (state === 'gameover' || state === 'win')) resetGame();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// on-screen touch/mouse controls (for phones with no keyboard)
+function bindButton(el, code) {
+  const press = e => { e.preventDefault(); keys[code] = true; el.classList.add('active'); };
+  const release = e => { e.preventDefault(); keys[code] = false; el.classList.remove('active'); };
+  el.addEventListener('pointerdown', press);
+  el.addEventListener('pointerup', release);
+  el.addEventListener('pointercancel', release);
+  el.addEventListener('pointerleave', release);
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+bindButton(document.getElementById('leftBtn'), 'ArrowLeft');
+bindButton(document.getElementById('rightBtn'), 'ArrowRight');
+bindButton(document.getElementById('fireBtn'), 'Space');
+
+canvas.addEventListener('pointerdown', () => {
+  if (state === 'gameover' || state === 'win') resetGame();
+});
 
 // ---------- Game State ----------
 let state = 'playing'; // playing | paused | gameover | win
