@@ -1,5 +1,6 @@
 Click the link below to start the game.
 Use the left, right arrows to move side to side, and the space bar to fire. P to pause.
+On mobile (iPhone/Android), use the on-screen ◀ ▶ and FIRE buttons.
 
 https://cgallup.github.io/space-invaders/
 
