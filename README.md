@@ -4,7 +4,8 @@ On mobile (iPhone/Android), use the on-screen ◀ ▶ and FIRE buttons.
 
 https://cgallup.github.io/space-invaders/
 
-<img width="644" height="708" alt="Screenshot 2026-07-21 at 5 23 10 PM" src="https://github.com/user-attachments/assets/518387e5-6190-4d4d-b772-981bcab1eb31" />
+<img width="703" height="785" alt="Mobile-version" src="https://github.com/user-attachments/assets/0b65e9f5-2244-4dd4-b2ce-9c0167cda101" />
+
 
 ## License
 
