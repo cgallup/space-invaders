@@ -133,9 +133,128 @@ const msgEl = document.getElementById('msg');
 
 const W = canvas.width, H = canvas.height;
 
+// ---------- Audio ----------
+let audioCtx = null;
+let masterGain = null;
+let bgGain = null;
+let bgPlaying = false;
+let bgTimer = null;
+
+function ensureAudio() {
+  if (!audioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    audioCtx = new AudioCtx();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.22;
+    masterGain.connect(audioCtx.destination);
+
+    bgGain = audioCtx.createGain();
+    bgGain.gain.value = 0.04;
+    bgGain.connect(masterGain);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (!bgPlaying) startBackgroundMusic();
+}
+
+function playTone(freq, duration, volume, type = 'square', startAt = 0, slide = 0, gainNode = masterGain) {
+  if (!audioCtx || !gainNode) return;
+  const oscillator = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime + startAt);
+  if (slide) {
+    oscillator.frequency.exponentialRampToValueAtTime(freq * slide, audioCtx.currentTime + startAt + duration);
+  }
+  gain.gain.setValueAtTime(0.0001, audioCtx.currentTime + startAt);
+  gain.gain.exponentialRampToValueAtTime(Math.max(volume, 0.0001), audioCtx.currentTime + startAt + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + startAt + duration);
+  oscillator.connect(gain);
+  gain.connect(gainNode);
+  oscillator.start(audioCtx.currentTime + startAt);
+  oscillator.stop(audioCtx.currentTime + startAt + duration + 0.02);
+}
+
+function playNoise(duration, volume, gainNode = masterGain) {
+  if (!audioCtx) return;
+  const bufferSize = audioCtx.sampleRate * duration;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+  }
+  const source = audioCtx.createBufferSource();
+  const gain = audioCtx.createGain();
+  source.buffer = buffer;
+  gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(volume, audioCtx.currentTime + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+  source.connect(gain);
+  gain.connect(gainNode);
+  source.start();
+}
+
+function playPlayerShot() {
+  ensureAudio();
+  playTone(880, 0.08, 0.04, 'square', 0, 1.08);
+  playTone(660, 0.06, 0.03, 'triangle', 0.01);
+}
+
+function playEnemyLaser() {
+  ensureAudio();
+  playTone(220, 0.12, 0.035, 'sawtooth', 0, 0.9);
+  playTone(180, 0.10, 0.02, 'triangle', 0.01);
+}
+
+function playEnemyExplosion() {
+  ensureAudio();
+  playNoise(0.18, 0.04);
+  playTone(150, 0.17, 0.035, 'sawtooth', 0, 0.7);
+  playTone(90, 0.14, 0.025, 'triangle', 0.01, 0.5);
+}
+
+function playPlayerHit() {
+  ensureAudio();
+  playTone(220, 0.24, 0.03, 'triangle', 0, 0.8);
+  playTone(180, 0.30, 0.02, 'sine', 0.01, 0.7);
+}
+
+function playGameOverMan() {
+  ensureAudio();
+  if ('speechSynthesis' in window) {
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance('Game over man');
+    utterance.rate = 0.9;
+    utterance.pitch = 0.75;
+    utterance.lang = 'en-US';
+    speechSynthesis.speak(utterance);
+  } else {
+    playTone(110, 0.3, 0.03, 'sawtooth');
+    playTone(90, 0.35, 0.025, 'triangle', 0.02);
+  }
+}
+
+function startBackgroundMusic() {
+  if (!audioCtx || bgPlaying) return;
+  bgPlaying = true;
+  const melody = [392, 440, 523, 587, 523, 440, 392, 349];
+  let step = 0;
+  const playNext = () => {
+    if (!bgPlaying) return;
+    const note = melody[step % melody.length];
+    const duration = 0.28;
+    playTone(note, duration, 0.012, 'triangle', 0, 1.02, bgGain);
+    playTone(note * 1.5, duration * 0.75, 0.008, 'sine', 0.01, 1.03, bgGain);
+    step++;
+    bgTimer = window.setTimeout(playNext, duration * 1000 + 80);
+  };
+  playNext();
+}
+
 // ---------- Input ----------
 const keys = {};
 window.addEventListener('keydown', e => {
+  ensureAudio();
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyP') togglePause();
@@ -145,7 +264,7 @@ window.addEventListener('keyup', e => { keys[e.code] = false; });
 
 // on-screen touch/mouse controls (for phones with no keyboard)
 function bindButton(el, code) {
-  const press = e => { e.preventDefault(); keys[code] = true; el.classList.add('active'); };
+  const press = e => { e.preventDefault(); ensureAudio(); keys[code] = true; el.classList.add('active'); };
   const release = e => { e.preventDefault(); keys[code] = false; el.classList.remove('active'); };
   el.addEventListener('pointerdown', press);
   el.addEventListener('pointerup', release);
@@ -158,6 +277,7 @@ bindButton(document.getElementById('rightBtn'), 'ArrowRight');
 bindButton(document.getElementById('fireBtn'), 'Space');
 
 canvas.addEventListener('pointerdown', () => {
+  ensureAudio();
   if (state === 'gameover' || state === 'win') resetGame();
 });
 
@@ -252,6 +372,7 @@ function makeBunkers() {
 
 // ---------- Reset ----------
 function resetGame() {
+  ensureAudio();
   score = 0;
   lives = 3;
   player.x = W / 2 - player.w / 2;
@@ -295,6 +416,7 @@ function update() {
   if (keys['Space'] && player.cooldown === 0) {
     playerBullets.push({ x: player.x + player.w / 2 - 2, y: player.y, w: 4, h: 12 });
     player.cooldown = 18;
+    playPlayerShot();
   }
 
   // move player bullets
@@ -335,6 +457,7 @@ function update() {
       const shooter = cols[Math.floor(Math.random() * cols.length)];
       if (shooter) {
         enemyBullets.push({ x: shooter.x + INV_W / 2 - 2, y: shooter.y + INV_H, w: 4, h: 12 });
+        playEnemyLaser();
       }
     }
 
@@ -355,6 +478,7 @@ function update() {
       if (rectsOverlap(b, { x: inv.x, y: inv.y, w: INV_W, h: INV_H })) {
         inv.alive = false;
         b.hit = true;
+        playEnemyExplosion();
         score += ROW_POINTS[inv.row];
         updateHud();
         break;
@@ -402,8 +526,10 @@ function rectsOverlap(a, b) {
 
 function playerHit() {
   lives--;
+  playPlayerHit();
   updateHud();
   if (lives <= 0) {
+    playGameOverMan();
     endGame(false);
   } else {
     player.x = W / 2 - player.w / 2;
