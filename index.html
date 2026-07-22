@@ -108,6 +108,7 @@
 <div id="wrap">
   <div id="hud">
     <span id="score">SCORE: 0</span>
+    <span id="level">LEVEL: 1</span>
     <span id="lives">LIVES: 3</span>
   </div>
   <div class="canvas-box">
@@ -128,6 +129,7 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const scoreEl = document.getElementById('score');
+const levelEl = document.getElementById('level');
 const livesEl = document.getElementById('lives');
 const msgEl = document.getElementById('msg');
 
@@ -204,6 +206,13 @@ function playEnemyLaser() {
   ensureAudio();
   playTone(220, 0.12, 0.035, 'sawtooth', 0, 0.9);
   playTone(180, 0.10, 0.02, 'triangle', 0.01);
+}
+
+function playFastShipSiren(phase = 0) {
+  ensureAudio();
+  const freq = phase === 0 ? 520 : 420;
+  playTone(freq, 0.22, 0.03, 'sawtooth', 0, phase === 0 ? 0.92 : 1.08);
+  playTone(freq * 0.75, 0.18, 0.02, 'triangle', 0.04, phase === 0 ? 0.95 : 1.05);
 }
 
 function playEnemyExplosion() {
@@ -285,6 +294,7 @@ canvas.addEventListener('pointerdown', () => {
 let state = 'playing'; // playing | paused | gameover | win
 let score = 0;
 let lives = 3;
+let level = 1;
 
 // ---------- Player ----------
 const player = {
@@ -297,6 +307,11 @@ const player = {
 
 let playerBullets = [];
 let enemyBullets = [];
+let fastShip = null;
+let fastShipLasers = [];
+let initialInvaderCount = 0;
+let destroyedInvaders = 0;
+let fastShipSpawnedThisLevel = false;
 
 // ---------- Invaders ----------
 const ROWS = 5;
@@ -349,7 +364,7 @@ function makeBunkerShape() {
       if (r >= BUNKER_ROWS - 3 && c >= 4 && c <= 6) alive = false;
       // round the top corners slightly
       if (r === 0 && (c === 0 || c === BUNKER_COLS - 1)) alive = false;
-      row.push(alive);
+      row.push(alive ? { health: 3, burningUntil: 0 } : { health: 0, burningUntil: 0 });
     }
     shape.push(row);
   }
@@ -375,21 +390,62 @@ function resetGame() {
   ensureAudio();
   score = 0;
   lives = 3;
+  level = 1;
   player.x = W / 2 - player.w / 2;
   playerBullets = [];
   enemyBullets = [];
+  fastShip = null;
+  fastShipLasers = [];
+  initialInvaderCount = ROWS * COLS;
+  destroyedInvaders = 0;
+  fastShipSpawnedThisLevel = false;
+  startLevel();
+}
+
+function startLevel() {
   invaders = makeInvaders();
   invaderDir = 1;
-  invaderMoveInterval = 45;
+  invaderSpeed = 6 + level * 1.25;
+  invaderMoveInterval = Math.max(10, 44 - level * 3);
   invaderMoveTimer = 0;
   bunkers = makeBunkers();
+  fastShip = null;
+  fastShipLasers = [];
+  fastShipSpawnedThisLevel = false;
+  player.x = W / 2 - player.w / 2;
   state = 'playing';
   msgEl.textContent = '';
   updateHud();
 }
 
+function makeFastShip() {
+  return {
+    x: -60,
+    y: 220,
+    w: 44,
+    h: 18,
+    dir: 1,
+    speed: (5 + level * 0.8) * 0.7,
+    hp: 3,
+    targetBunker: BUNKER_COUNT - 1,
+    hasFired: false,
+    isFiring: false,
+    fireStart: 0,
+    sirenPhase: 0,
+    sirenNext: 0,
+  };
+}
+
+function showLevelBanner() {
+  msgEl.textContent = 'LEVEL ' + level;
+  window.setTimeout(() => {
+    if (state === 'playing') msgEl.textContent = '';
+  }, 900);
+}
+
 function updateHud() {
   scoreEl.textContent = 'SCORE: ' + score;
+  levelEl.textContent = 'LEVEL: ' + level;
   livesEl.textContent = 'LIVES: ' + lives;
 }
 
@@ -419,6 +475,8 @@ function update() {
     playPlayerShot();
   }
 
+  const now = performance.now();
+
   // move player bullets
   playerBullets.forEach(b => b.y -= 9);
   playerBullets = playerBullets.filter(b => b.y + b.h > 0);
@@ -426,6 +484,81 @@ function update() {
   // move enemy bullets
   enemyBullets.forEach(b => b.y += 5);
   enemyBullets = enemyBullets.filter(b => b.y < H);
+
+  // fast ship movement and firing
+  if (fastShip) {
+    const targetBunker = bunkers[fastShip.targetBunker];
+    const targetCenter = targetBunker ? targetBunker.x + (BUNKER_COLS * BLOCK) / 2 : W / 2;
+
+    if (!fastShip.hasFired) {
+      if (!fastShip.isFiring) {
+        fastShip.x += fastShip.speed * fastShip.dir;
+        if (fastShip.x + fastShip.w / 2 >= targetCenter - 8) {
+          fastShip.isFiring = true;
+          fastShip.fireStart = now;
+          fastShip.x = targetCenter - fastShip.w / 2;
+          const bunkerBottom = targetBunker ? targetBunker.y + BUNKER_ROWS * BLOCK : H;
+          const targetCol = targetBunker
+            ? Math.max(0, Math.min(BUNKER_COLS - 1, Math.floor((targetCenter - 2 - targetBunker.x) / BLOCK)))
+            : 0;
+          fastShipLasers = [{
+            x: targetCenter - 2,
+            y: fastShip.y + fastShip.h,
+            w: 4,
+            h: Math.max(0, bunkerBottom - (fastShip.y + fastShip.h) + 4),
+            type: 'fastShipLaser',
+            bunkerIndex: fastShip.targetBunker,
+            targetCol,
+            burnRow: 0,
+            nextBurnAt: now,
+            burnInterval: 700,
+          }];
+          startBunkerBurn(targetBunker, now);
+          playEnemyLaser();
+        }
+      } else {
+        // lock the fast ship in place while firing so the beam stays aimed at the bunker
+        fastShip.x = targetCenter - fastShip.w / 2;
+        const bunkerBottom = targetBunker ? targetBunker.y + BUNKER_ROWS * BLOCK : H;
+        fastShipLasers.forEach(b => {
+          b.y = fastShip.y + fastShip.h;
+          b.h = Math.max(0, bunkerBottom - b.y);
+          if (now >= b.nextBurnAt) {
+            const col = b.targetCol != null ? b.targetCol : Math.floor((b.x - targetBunker.x) / BLOCK);
+            if (targetBunker && col >= 0 && col < BUNKER_COLS && b.burnRow < BUNKER_ROWS) {
+              const block = targetBunker.blocks[b.burnRow][col];
+              if (block && block.health > 0) {
+                startBunkerBurn(targetBunker, now);
+              }
+              b.burnRow++;
+            }
+            b.nextBurnAt = now + b.burnInterval;
+          }
+        });
+
+        if (now - fastShip.fireStart >= 3000) {
+          fastShip.hasFired = true;
+          fastShip.isFiring = false;
+          fastShipLasers = [];
+        }
+      }
+    } else {
+      fastShip.x += fastShip.speed * fastShip.dir;
+      if (fastShip.x > W + fastShip.w) {
+        fastShip = null;
+      }
+    }
+  }
+
+  // ensure the fast ship beam only extends to the target bunker bottom
+  fastShipLasers = fastShipLasers.filter(b => {
+    if (b.type !== 'fastShipLaser') return b.y < H + 220;
+    const bunker = bunkers[b.bunkerIndex];
+    if (!bunker) return false;
+    const bunkerBottom = bunker.y + BUNKER_ROWS * BLOCK;
+    b.h = Math.max(0, bunkerBottom - b.y);
+    return b.y < bunkerBottom;
+  });
 
   // invader movement (stepwise, classic style)
   const alive = aliveInvaders();
@@ -461,13 +594,30 @@ function update() {
       }
     }
 
+    if (!fastShip && !fastShipSpawnedThisLevel && destroyedInvaders >= Math.ceil(initialInvaderCount * 0.4)) {
+      fastShip = makeFastShip();
+      fastShipSpawnedThisLevel = true;
+    }
+
+    if (fastShip && now >= fastShip.sirenNext) {
+      playFastShipSiren(fastShip.sirenPhase);
+      fastShip.sirenPhase = (fastShip.sirenPhase + 1) % 2;
+      fastShip.sirenNext = now + 320;
+    }
+
     // check invaders reaching player line -> game over
     if (alive.some(i => i.y + INV_H >= player.y)) {
       endGame(false);
       return;
     }
   } else {
-    endGame(true);
+    if (level >= 5) {
+      endGame(true);
+    } else {
+      level += 1;
+      startLevel();
+      showLevelBanner();
+    }
     return;
   }
 
@@ -478,6 +628,7 @@ function update() {
       if (rectsOverlap(b, { x: inv.x, y: inv.y, w: INV_W, h: INV_H })) {
         inv.alive = false;
         b.hit = true;
+        destroyedInvaders++;
         playEnemyExplosion();
         score += ROW_POINTS[inv.row];
         updateHud();
@@ -487,11 +638,36 @@ function update() {
   });
   playerBullets = playerBullets.filter(b => !b.hit);
 
+  // collisions: player bullets vs fast ship
+  playerBullets.forEach(b => {
+    if (fastShip && rectsOverlap(b, fastShip)) {
+      fastShip.hp--;
+      b.hit = true;
+      if (fastShip.hp <= 0) {
+        fastShip = null;
+        playEnemyExplosion();
+        score += 500;
+        updateHud();
+      }
+    }
+  });
+  playerBullets = playerBullets.filter(b => !b.hit);
+
   // collisions: bullets vs bunkers
-  playerBullets.forEach(b => damageBunkers(b));
-  enemyBullets.forEach(b => damageBunkers(b));
+  playerBullets.forEach(b => damageBunkers(b, now));
+  enemyBullets.forEach(b => damageBunkers(b, now));
+  fastShipLasers.forEach(b => damageBunkers(b, now));
   playerBullets = playerBullets.filter(b => !b.hit);
   enemyBullets = enemyBullets.filter(b => !b.hit);
+  fastShipLasers = fastShipLasers.filter(b => !b.hit);
+
+  // fire-only beams should persist through the bunker while burning it
+  fastShipLasers.forEach(b => {
+    if (b.type === 'fastShipLaser' && b.bunkerIndex != null) {
+      const bunker = bunkers[b.bunkerIndex];
+      if (!bunker) b.hit = true;
+    }
+  });
 
   // collisions: enemy bullets vs player
   enemyBullets.forEach(b => {
@@ -501,19 +677,32 @@ function update() {
     }
   });
   enemyBullets = enemyBullets.filter(b => !b.hit);
+
+  fastShipLasers = fastShipLasers.filter(b => !b.hit);
 }
 
-function damageBunkers(bullet) {
+function startBunkerBurn(bunker, now) {
+  if (!bunker || bunker.burnStart) return;
+  bunker.burnStart = now;
+  bunker.burnDuration = 5000;
+}
+
+function damageBunkers(bullet, now) {
   for (const bunker of bunkers) {
     for (let r = 0; r < BUNKER_ROWS; r++) {
       for (let c = 0; c < BUNKER_COLS; c++) {
-        if (!bunker.blocks[r][c]) continue;
+        const block = bunker.blocks[r][c];
+        if (!block || block.health <= 0) continue;
         const bx = bunker.x + c * BLOCK;
         const by = bunker.y + r * BLOCK;
         if (rectsOverlap(bullet, { x: bx, y: by, w: BLOCK, h: BLOCK })) {
-          bunker.blocks[r][c] = false;
-          bullet.hit = true;
-          return;
+          if (bullet.type === 'fastShipLaser') {
+            startBunkerBurn(bunker, now);
+          } else {
+            block.health -= 1;
+            bullet.hit = true;
+            return;
+          }
         }
       }
     }
@@ -546,11 +735,28 @@ function endGame(won) {
 // ---------- Draw ----------
 function draw() {
   ctx.clearRect(0, 0, W, H);
+  const now = performance.now();
 
   // player
   ctx.fillStyle = '#0f0';
   ctx.fillRect(player.x, player.y, player.w, player.h);
   ctx.fillRect(player.x + player.w / 2 - 4, player.y - 8, 8, 8);
+
+  // fast ship
+  if (fastShip) {
+    ctx.fillStyle = '#ff4d6d';
+    ctx.fillRect(fastShip.x + 8, fastShip.y + 4, fastShip.w - 16, 4);
+    ctx.fillRect(fastShip.x + 4, fastShip.y + 8, fastShip.w - 8, 6);
+    ctx.fillRect(fastShip.x, fastShip.y + 12, fastShip.w, 4);
+    ctx.fillRect(fastShip.x + 10, fastShip.y + 2, 6, 4);
+    ctx.fillRect(fastShip.x + fastShip.w - 16, fastShip.y + 2, 6, 4);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(fastShip.x + fastShip.w / 2 - 2, fastShip.y + 2, 4, 6);
+  }
+
+  // fast ship lasers
+  ctx.fillStyle = '#ff9f1c';
+  fastShipLasers.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
 
   // player bullets
   ctx.fillStyle = '#fff';
@@ -568,13 +774,41 @@ function draw() {
   });
 
   // bunkers
-  ctx.fillStyle = '#0af';
   bunkers.forEach(bunker => {
     for (let r = 0; r < BUNKER_ROWS; r++) {
       for (let c = 0; c < BUNKER_COLS; c++) {
-        if (bunker.blocks[r][c]) {
-          ctx.fillRect(bunker.x + c * BLOCK, bunker.y + r * BLOCK, BLOCK, BLOCK);
+        const block = bunker.blocks[r][c];
+        if (!block || block.health <= 0) continue;
+        const burnActive = bunker.burnStart != null;
+        if (burnActive) {
+          const rowDelay = bunker.burnDuration / BUNKER_ROWS;
+          const rowBurnStart = bunker.burnStart + r * rowDelay;
+          const rowProgress = Math.min(1, Math.max(0, (now - rowBurnStart) / rowDelay));
+          if (rowProgress >= 1) {
+            block.health = 0;
+            continue;
+          }
+          if (rowProgress > 0) {
+            const glow = 4;
+            const glowLeft = bunker.x + c * BLOCK - glow;
+            const glowTop = bunker.y + r * BLOCK - glow;
+            const glowSize = BLOCK + glow * 2;
+            const yellowToRed = rowProgress <= 0.5
+              ? `rgb(255, ${200 - Math.floor(rowProgress * 2 * 140)}, 0)`
+              : `rgb(255, ${Math.floor(100 - (rowProgress - 0.5) * 200)}, 0)`;
+            ctx.save();
+            ctx.shadowColor = yellowToRed;
+            ctx.shadowBlur = 12;
+            ctx.fillStyle = yellowToRed;
+            ctx.fillRect(glowLeft, glowTop, glowSize, glowSize);
+            ctx.restore();
+            ctx.fillStyle = yellowToRed;
+            ctx.fillRect(bunker.x + c * BLOCK, bunker.y + r * BLOCK, BLOCK, BLOCK);
+            continue;
+          }
         }
+        ctx.fillStyle = block.health === 1 ? '#5fe3ff' : '#0af';
+        ctx.fillRect(bunker.x + c * BLOCK, bunker.y + r * BLOCK, BLOCK, BLOCK);
       }
     }
   });
